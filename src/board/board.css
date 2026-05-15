@@ -508,6 +508,13 @@
   box-sizing: border-box;
 }
 
+/* Task notes use a higher z-index than these defaults; keep project edge
+   handles above the mini-note layer (stacking context on .mini-layer) so
+   tall tasks never block resizing the project. */
+.project-sticky > .resize-handle {
+  z-index: 1;
+}
+
 .resize-handle:hover {
   background: rgba(0, 0, 0, 0.06);
 }
@@ -616,6 +623,8 @@
   min-height: 0;
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.04);
+  isolation: isolate;
+  z-index: 0;
 }
 
 .mini-sticky {

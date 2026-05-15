@@ -269,17 +269,8 @@ export function buildWeeklyReportMarkdown(
   events: TaskChangeEvent[],
   now: Date,
 ): string {
-  const endMs = now.getTime()
-  const startMs = endMs - 7 * 24 * 60 * 60 * 1000
-  const week = events
-    .filter((e) => {
-      const t = ms(e.at)
-      return t >= startMs && t <= endMs
-    })
-    .sort((a, b) => ms(a.at) - ms(b.at))
-
-  const startLabel = fmtDay(new Date(startMs).toISOString())
-  const endLabel = fmtDay(new Date(endMs).toISOString())
+  const w = weeklyWindow(events, now)
+  const { week, startLabel, endLabel } = w
   const lines: string[] = []
   lines.push(`# Weekly Updates`)
   lines.push(``)
@@ -336,13 +327,7 @@ export function buildWeeklyReportMarkdown(
               lines.push(`    - "${clipped(row, 64)}"`)
             }
           }
-        } else if (e.kind === 'deleted') {
-          const why =
-            e.reason === 'project_removed'
-              ? 'Completed (project removed)'
-              : 'Completed (task removed)'
-          lines.push(`- ${why}`)
-        } else {
+        } else if (e.kind === 'updated') {
           if (e.changes.length === 0) {
             lines.push(`- Task updated`)
           } else {
@@ -385,6 +370,9 @@ function weeklyWindow(events: TaskChangeEvent[], now: Date): WeeklyWindow {
       const t = ms(e.at)
       return t >= startMs && t <= endMs
     })
+    /* Task removal ("closed") is excluded: closures are expected next week after
+       the work week, so they should not appear in this window's report. */
+    .filter((e) => e.kind !== 'deleted')
     .sort((a, b) => ms(a.at) - ms(b.at))
   return {
     startMs,
@@ -423,14 +411,7 @@ export function buildWeeklyDiffText(events: TaskChangeEvent[], now: Date): strin
         lines.push(`INITIAL_CONTENT:`)
         for (const row of body) lines.push(`+ ${row}`)
       }
-    } else if (e.kind === 'deleted') {
-      lines.push(`EVENT: deleted (${e.reason})`)
-      const body = splitMeaningfulLines(e.text)
-      if (body.length > 0) {
-        lines.push(`FINAL_CONTENT_SNAPSHOT:`)
-        for (const row of body) lines.push(`- ${row}`)
-      }
-    } else {
+    } else if (e.kind === 'updated') {
       lines.push(`EVENT: content_changed`)
       for (const c of e.changes) {
         if (c.field === 'title') {

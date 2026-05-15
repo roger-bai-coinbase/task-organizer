@@ -250,6 +250,36 @@ function miniLayerInnerWidth(project: ProjectNote): number {
   return Math.max(60, project.width - 20)
 }
 
+/** Enlarge the project so a task rect fits inside the mini layer (matches drag/resize bounds). */
+function growProjectToFitTask(project: ProjectNote, task: TaskNote): ProjectNote {
+  let { width, height, x, y } = project
+  const innerW = miniLayerInnerWidth(project)
+  const innerH = estimatedMiniLayerHeight(project)
+  const right = task.x + task.width
+  const bottom = task.y + task.height
+
+  if (right > innerW) {
+    width = Math.max(width, right + 20)
+    width = clamp(width, PROJECT_MIN_W, PROJECT_MAX_W)
+  }
+  if (bottom > innerH) {
+    height = Math.max(height, bottom + 120)
+    height = clamp(height, PROJECT_MIN_H, PROJECT_MAX_H)
+  }
+
+  x = clamp(x, 0, BOARD_W - width)
+  y = clamp(y, 0, BOARD_H - height)
+  return { ...project, width, height, x, y }
+}
+
+function expandProjectToFitAllTasks(project: ProjectNote): ProjectNote {
+  let p = project
+  for (const t of p.tasks) {
+    p = growProjectToFitTask(p, t)
+  }
+  return p
+}
+
 function findFreeProjectPosition(
   projects: ProjectNote[],
   w: number,
@@ -688,22 +718,42 @@ export function BoardApp() {
           ...prev,
           projects: prev.projects.map((p) => {
             if (p.id !== projectId) return p
-            return {
-              ...p,
-              tasks: p.tasks.map((t) => {
-                if (t.id !== taskId) return t
-                let width = t.width
-                if (extraW > 0) {
-                  width = clamp(
-                    t.width + extraW,
-                    MINI_MIN_W,
-                    Math.min(MINI_MAX_W, p.width - 20 - t.x),
-                  )
-                }
-                if (fitH === t.height && width === t.width) return t
-                return { ...t, height: fitH, width }
-              }),
+            const t = p.tasks.find((x) => x.id === taskId)
+            if (!t) return p
+
+            let width = t.width
+            if (extraW > 0) {
+              width = clamp(
+                t.width + extraW,
+                MINI_MIN_W,
+                Math.min(MINI_MAX_W, p.width - 20 - t.x),
+              )
             }
+            if (fitH === t.height && width === t.width) return p
+
+            let newTask: TaskNote = { ...t, height: fitH, width }
+            let newP: ProjectNote = {
+              ...p,
+              tasks: p.tasks.map((tt) => (tt.id === taskId ? newTask : tt)),
+            }
+            newP = expandProjectToFitAllTasks(newP)
+
+            if (extraW > 0) {
+              const maxTW = Math.min(MINI_MAX_W, newP.width - 20 - t.x)
+              const w2 = clamp(t.width + extraW, MINI_MIN_W, maxTW)
+              if (w2 !== newTask.width) {
+                newTask = { ...newTask, width: w2 }
+                newP = {
+                  ...newP,
+                  tasks: newP.tasks.map((tt) =>
+                    tt.id === taskId ? newTask : tt,
+                  ),
+                }
+                newP = expandProjectToFitAllTasks(newP)
+              }
+            }
+
+            return newP
           }),
         }
       })
@@ -717,7 +767,6 @@ export function BoardApp() {
       if (!prev) return prev
       let changed = false
       const projects = prev.projects.map((p) => {
-        let projectChanged = false
         const tasks = p.tasks.map((t) => {
           const tKey = taskEditKey(p.id, t.id)
           if (taskBodyFocusKey === tKey) return t
@@ -739,12 +788,27 @@ export function BoardApp() {
             )
           }
           if (fitH === t.height && width === t.width) return t
-          projectChanged = true
-          changed = true
           return { ...t, height: fitH, width }
         })
-        if (!projectChanged) return p
-        return { ...p, tasks }
+
+        let newP = expandProjectToFitAllTasks({ ...p, tasks })
+        const taskGeomsChanged = tasks.some((t, i) => {
+          const u = p.tasks[i]
+          return (
+            t !== u &&
+            (t.height !== u.height || t.width !== u.width)
+          )
+        })
+        const projectDimsChanged =
+          newP.width !== p.width ||
+          newP.height !== p.height ||
+          newP.x !== p.x ||
+          newP.y !== p.y
+
+        if (!taskGeomsChanged && !projectDimsChanged) return p
+
+        changed = true
+        return newP
       })
       return changed ? { ...prev, projects } : prev
     })
