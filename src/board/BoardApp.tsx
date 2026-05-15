@@ -49,6 +49,7 @@ import { normalizeMiniBullets } from './miniNoteBulletKeys'
 import {
   buildWeeklyDiffText,
   collectTaskEvents,
+  formatWeeklyReportWeekLabel,
   mergeTaskEvents,
   type TaskChangeEvent,
 } from './taskEvents'
@@ -1219,10 +1220,21 @@ export function BoardApp() {
     setReportBusy(true)
     try {
       const now = new Date()
-      const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-      const weekLabel = `${start.toLocaleDateString()} - ${now.toLocaleDateString()}`
+      const weekLabel = formatWeeklyReportWeekLabel(now)
       // Step 1: temporary weekly diff artifact.
-      const diffText = buildWeeklyDiffText(taskEvents, now)
+      const diffText = buildWeeklyDiffText(taskEvents, now, (() => {
+        const m = new Map<string, string>()
+        const ws = workspaceRef.current
+        if (!ws) return m
+        for (const b of ws.boards) {
+          for (const p of b.projects) {
+            for (const t of p.tasks) {
+              m.set(`${p.id}:${t.id}`, t.text)
+            }
+          }
+        }
+        return m
+      })())
       const stamp = now.toISOString().slice(0, 10)
       const result = await createWeeklyReportOnDisk({
         diffText,

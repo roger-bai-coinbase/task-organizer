@@ -1,4 +1,5 @@
 import type { BoardState, ProjectNote, TaskNote } from './types'
+import { extractHttpLinksFromTaskBody } from './linkifyTaskBody'
 
 export type TaskField = 'title' | 'text'
 
@@ -265,9 +266,31 @@ export function parseTaskEvents(raw: unknown): TaskChangeEvent[] {
   }) as TaskChangeEvent[]
 }
 
+function collectLinksFromTaskEvents(
+  evs: TaskChangeEvent[],
+  liveTaskBody?: string,
+): string[] {
+  const chunks: string[] = []
+  for (const e of evs) {
+    if (e.kind === 'created') {
+      chunks.push(e.text)
+    } else if (e.kind === 'updated') {
+      for (const c of e.changes) {
+        if (c.field === 'text') {
+          chunks.push(c.before, c.after)
+        }
+      }
+    }
+  }
+  if (liveTaskBody) chunks.push(liveTaskBody)
+  return extractHttpLinksFromTaskBody(chunks.join('\n'))
+}
+
 export function buildWeeklyReportMarkdown(
   events: TaskChangeEvent[],
   now: Date,
+  /** `projectId:taskId` -> current body; merges with event text for link extraction */
+  taskBodies?: ReadonlyMap<string, string>,
 ): string {
   const w = weeklyWindow(events, now)
   const { week, startLabel, endLabel } = w
@@ -348,6 +371,16 @@ export function buildWeeklyReportMarkdown(
           }
         }
       }
+      const first = evs[0]
+      const liveBody =
+        first && taskBodies?.get(`${first.projectId}:${first.taskId}`)
+      const taskLinks = collectLinksFromTaskEvents(evs, liveBody)
+      if (taskLinks.length > 0) {
+        lines.push(`- Links`)
+        for (const link of taskLinks) {
+          lines.push(`  - ${link}`)
+        }
+      }
       lines.push(``)
     }
   }
@@ -362,9 +395,24 @@ type WeeklyWindow = {
   week: TaskChangeEvent[]
 }
 
+/** Inclusive seven local-calendar days ending on `now`'s date (the generation day). */
+function weeklyReportCalendarBounds(now: Date): { startMs: number; endMs: number } {
+  const y = now.getFullYear()
+  const mo = now.getMonth()
+  const d = now.getDate()
+  const startMs = new Date(y, mo, d - 6).getTime()
+  const endMs = new Date(y, mo, d, 23, 59, 59, 999).getTime()
+  return { startMs, endMs }
+}
+
+/** Week label for the AI report; matches the diff calendar window. */
+export function formatWeeklyReportWeekLabel(now: Date): string {
+  const { startMs, endMs } = weeklyReportCalendarBounds(now)
+  return `${fmtDay(new Date(startMs).toISOString())} - ${fmtDay(new Date(endMs).toISOString())}`
+}
+
 function weeklyWindow(events: TaskChangeEvent[], now: Date): WeeklyWindow {
-  const endMs = now.getTime()
-  const startMs = endMs - 7 * 24 * 60 * 60 * 1000
+  const { startMs, endMs } = weeklyReportCalendarBounds(now)
   const week = events
     .filter((e) => {
       const t = ms(e.at)
@@ -386,8 +434,15 @@ function weeklyWindow(events: TaskChangeEvent[], now: Date): WeeklyWindow {
 /**
  * Temporary weekly diff artifact for AI summarization.
  * It intentionally stays more literal/structured than final markdown.
+ *
+ * `taskBodies`: map `projectId:taskId` -> current note body so LINKS include
+ * URLs present in the live task even when this week’s events omit body text.
  */
-export function buildWeeklyDiffText(events: TaskChangeEvent[], now: Date): string {
+export function buildWeeklyDiffText(
+  events: TaskChangeEvent[],
+  now: Date,
+  taskBodies?: ReadonlyMap<string, string>,
+): string {
   const w = weeklyWindow(events, now)
   const lines: string[] = []
   lines.push(`# Weekly Task Diff`)
@@ -399,44 +454,86 @@ export function buildWeeklyDiffText(events: TaskChangeEvent[], now: Date): strin
     return lines.join('\n')
   }
 
+  const byProject = new Map<string, TaskChangeEvent[]>()
+  const projectOrder: string[] = []
   for (const e of w.week) {
-    const project = e.projectTitle.trim() || 'Untitled project'
-    const task = e.taskTitle.trim() || 'Untitled task'
-    lines.push(`PROJECT: ${project}`)
-    lines.push(`TASK: ${task}`)
-    if (e.kind === 'created') {
-      lines.push(`EVENT: created`)
-      const body = splitMeaningfulLines(e.text)
-      if (body.length > 0) {
-        lines.push(`INITIAL_CONTENT:`)
-        for (const row of body) lines.push(`+ ${row}`)
+    const k = `${e.projectId}::${e.projectTitle || 'Untitled project'}`
+    if (!byProject.has(k)) {
+      byProject.set(k, [])
+      projectOrder.push(k)
+    }
+    byProject.get(k)?.push(e)
+  }
+
+  for (const pk of projectOrder) {
+    const items = byProject.get(pk) ?? []
+    const byTask = new Map<string, TaskChangeEvent[]>()
+    const taskOrder: string[] = []
+    for (const e of items) {
+      const title = e.taskTitle.trim() || 'Untitled task'
+      const tk = `${e.taskId}::${title}`
+      if (!byTask.has(tk)) {
+        byTask.set(tk, [])
+        taskOrder.push(tk)
       }
-    } else if (e.kind === 'updated') {
-      lines.push(`EVENT: content_changed`)
-      for (const c of e.changes) {
-        if (c.field === 'title') {
-          lines.push(`TITLE_DIFF: "${c.before}" -> "${c.after}"`)
-        } else {
-          lines.push(`CONTENT_CHANGES:`)
-          const before = splitMeaningfulLines(c.before)
-          const after = splitMeaningfulLines(c.after)
-          const n = Math.max(before.length, after.length)
-          for (let i = 0; i < n; i++) {
-            const b = before[i]
-            const a = after[i]
-            if (typeof b === 'string' && typeof a === 'string') {
-              if (b === a) lines.push(`= ${b}`)
-              else lines.push(`~ "${b}" -> "${a}"`)
-            } else if (typeof a === 'string') {
-              lines.push(`+ ${a}`)
-            } else if (typeof b === 'string') {
-              lines.push(`- ${b}`)
+      byTask.get(tk)?.push(e)
+    }
+
+    for (const tk of taskOrder) {
+      const evs = byTask.get(tk) ?? []
+      const project = pk.split('::')[1]?.trim() || 'Untitled project'
+      const task = tk.split('::')[1]?.trim() || 'Untitled task'
+      lines.push(`PROJECT: ${project}`)
+      lines.push(`TASK: ${task}`)
+
+      for (const e of evs) {
+        if (e.kind === 'created') {
+          lines.push(`EVENT: created`)
+          const body = splitMeaningfulLines(e.text)
+          if (body.length > 0) {
+            lines.push(`INITIAL_CONTENT:`)
+            for (const row of body) lines.push(`+ ${row}`)
+          }
+        } else if (e.kind === 'updated') {
+          lines.push(`EVENT: content_changed`)
+          for (const c of e.changes) {
+            if (c.field === 'title') {
+              lines.push(`TITLE_DIFF: "${c.before}" -> "${c.after}"`)
+            } else {
+              lines.push(`CONTENT_CHANGES:`)
+              const before = splitMeaningfulLines(c.before)
+              const after = splitMeaningfulLines(c.after)
+              const n = Math.max(before.length, after.length)
+              for (let i = 0; i < n; i++) {
+                const b = before[i]
+                const a = after[i]
+                if (typeof b === 'string' && typeof a === 'string') {
+                  if (b === a) lines.push(`= ${b}`)
+                  else lines.push(`~ "${b}" -> "${a}"`)
+                } else if (typeof a === 'string') {
+                  lines.push(`+ ${a}`)
+                } else if (typeof b === 'string') {
+                  lines.push(`- ${b}`)
+                }
+              }
             }
           }
         }
       }
+
+      const first = evs[0]
+      const liveBody =
+        first && taskBodies?.get(`${first.projectId}:${first.taskId}`)
+      const taskLinks = collectLinksFromTaskEvents(evs, liveBody)
+      if (taskLinks.length > 0) {
+        lines.push(`LINKS:`)
+        for (const link of taskLinks) {
+          lines.push(`- ${link}`)
+        }
+      }
+      lines.push(``)
     }
-    lines.push(``)
   }
+
   return lines.join('\n')
 }

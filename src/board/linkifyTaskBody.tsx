@@ -139,3 +139,50 @@ export function linkifyTaskBodyText(text: string): ReactNode {
 
   return <>{out}</>
 }
+
+/**
+ * Unique http(s) links in document order: `[label](url)` when parsed from
+ * markdown (label sanitized), otherwise the bare URL string — same shapes
+ * users store in task bodies.
+ */
+export function extractHttpLinksFromTaskBody(text: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  let i = 0
+
+  while (i < text.length) {
+    const slice = text.slice(i)
+
+    if (slice[0] === '[') {
+      const m = slice.match(MD)
+      if (m) {
+        const href = safeHref(m[2])
+        if (href && !seen.has(href)) {
+          seen.add(href)
+          const label = m[1].trim()
+            ? sanitizeMarkdownLinkLabel(m[1])
+            : href
+          out.push(`[${label}](${href})`)
+        }
+        i += m[0].length
+        continue
+      }
+    }
+
+    const bm = slice.match(BARE)
+    if (bm) {
+      const raw = bm[0]
+      const href = safeHref(trimTrailingPunct(raw)) ?? safeHref(raw)
+      if (href && !seen.has(href)) {
+        seen.add(href)
+        out.push(href)
+      }
+      i += raw.length
+      continue
+    }
+
+    i += 1
+  }
+
+  return out
+}

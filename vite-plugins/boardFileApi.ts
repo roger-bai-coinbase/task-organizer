@@ -73,6 +73,7 @@ async function summarizeWithAi(input: {
     '- Keep each task update line short and human-readable.',
     '- At most 3 indented update bullets per task.',
     '- If a bullet has exactly one sub-bullet beneath it, merge them into a single bullet at the parent indent (one concise line); avoid a parent line plus a lone child that repeats or splits the same point.',
+    '- When the diff includes a LINKS: block for a task, include every listed URL in the report under that task: use the exact same markdown as given (either `[label](url)` or a bare `https://...` line). Those lines merge links from the week’s edits and the task’s current note body—do not drop or rewrite links.',
     '- Never say that notes were updated, that the description or task text was edited, or similar meta about changing fields. Summarize only substantive outcomes, facts, or decisions implied by the diff; do not describe the act of editing text.',
   ].join('\n')
 
