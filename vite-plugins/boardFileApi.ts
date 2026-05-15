@@ -72,6 +72,7 @@ async function summarizeWithAi(input: {
     '- No per-event timestamps.',
     '- Keep each task update line short and human-readable.',
     '- At most 3 indented update bullets per task.',
+    '- If a bullet has exactly one sub-bullet beneath it, merge them into a single bullet at the parent indent (one concise line); avoid a parent line plus a lone child that repeats or splits the same point.',
     '- Never say that notes were updated, that the description or task text was edited, or similar meta about changing fields. Summarize only substantive outcomes, facts, or decisions implied by the diff; do not describe the act of editing text.',
   ].join('\n')
 
