@@ -58,8 +58,57 @@
 }
 
 .board-tab-wrap {
+  position: relative;
   display: flex;
+  align-items: center;
+  gap: 2px;
   min-width: 0;
+}
+
+.board-toolbar-boards--reordering {
+  user-select: none;
+}
+
+.board-tab-wrap--dragging .board-tab {
+  cursor: grabbing;
+  opacity: 0.55;
+}
+
+.board-tab-wrap--drop-before::before,
+.board-tab-wrap--drop-after::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--focus, #5b8def);
+  pointer-events: none;
+}
+
+.board-tab-wrap--drop-before::before {
+  left: -3px;
+}
+
+.board-tab-wrap--drop-after::after {
+  right: -3px;
+}
+
+.board-app[data-theme='blackboard'] .board-tab-wrap--drop-before::before,
+.board-app[data-theme='blackboard'] .board-tab-wrap--drop-after::after {
+  background: #9bdc9b;
+}
+
+.board-tab-remove {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  font-size: 0.95rem;
+  opacity: 0.5;
+}
+
+.board-tab-wrap:hover .board-tab-remove {
+  opacity: 1;
 }
 
 .board-tab {
@@ -72,7 +121,8 @@
   font: inherit;
   font-size: 0.8125rem;
   line-height: 1.25;
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
   text-overflow: ellipsis;
   overflow: hidden;
   white-space: nowrap;
