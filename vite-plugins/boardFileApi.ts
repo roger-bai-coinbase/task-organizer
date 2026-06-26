@@ -15,6 +15,109 @@ function isAbortError(e: unknown): boolean {
 
 type WeeklyReportAiOutcome = { markdown: string } | { error: string }
 
+function isRecord(raw: unknown): raw is Record<string, unknown> {
+  return !!raw && typeof raw === 'object' && !Array.isArray(raw)
+}
+
+function isTheme(raw: unknown): boolean {
+  return raw === 'whiteboard' || raw === 'blackboard'
+}
+
+function isFiniteNumber(raw: unknown): boolean {
+  return typeof raw === 'number' && Number.isFinite(raw)
+}
+
+function isPositiveNumber(raw: unknown): boolean {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0
+}
+
+function isValidIso(raw: unknown): boolean {
+  return typeof raw === 'string' && !Number.isNaN(Date.parse(raw))
+}
+
+function isValidTaskNote(raw: unknown): boolean {
+  if (!isRecord(raw)) return false
+  return (
+    typeof raw.id === 'string' &&
+    typeof raw.title === 'string' &&
+    typeof raw.text === 'string' &&
+    isValidIso(raw.createdAt) &&
+    isFiniteNumber(raw.x) &&
+    isFiniteNumber(raw.y) &&
+    isPositiveNumber(raw.width) &&
+    isPositiveNumber(raw.height)
+  )
+}
+
+function isValidProjectNote(raw: unknown): boolean {
+  if (!isRecord(raw) || !Array.isArray(raw.tasks)) return false
+  return (
+    typeof raw.id === 'string' &&
+    typeof raw.title === 'string' &&
+    isValidIso(raw.createdAt) &&
+    isFiniteNumber(raw.hue) &&
+    isFiniteNumber(raw.x) &&
+    isFiniteNumber(raw.y) &&
+    isPositiveNumber(raw.width) &&
+    isPositiveNumber(raw.height) &&
+    raw.tasks.every(isValidTaskNote)
+  )
+}
+
+function isValidBoardEntry(raw: unknown): boolean {
+  if (!isRecord(raw) || !Array.isArray(raw.projects)) return false
+  return (
+    typeof raw.id === 'string' &&
+    (typeof raw.title === 'string' || typeof raw.title === 'undefined') &&
+    (isTheme(raw.theme) || typeof raw.theme === 'undefined') &&
+    raw.projects.every(isValidProjectNote)
+  )
+}
+
+function isValidBoardState(raw: unknown): boolean {
+  if (!isRecord(raw) || !Array.isArray(raw.projects)) return false
+  return isTheme(raw.theme) && raw.projects.every(isValidProjectNote)
+}
+
+function isValidWorkspaceState(raw: unknown): boolean {
+  if (!isRecord(raw)) return false
+  if (Array.isArray(raw.boards) && typeof raw.activeBoardId === 'string') {
+    return raw.boards.length > 0 && raw.boards.every(isValidBoardEntry)
+  }
+  return isValidBoardState(raw)
+}
+
+function isValidTaskEvent(raw: unknown): boolean {
+  if (!isRecord(raw)) return false
+  const base =
+    isValidIso(raw.at) &&
+    typeof raw.projectId === 'string' &&
+    typeof raw.projectTitle === 'string' &&
+    typeof raw.taskId === 'string' &&
+    typeof raw.taskTitle === 'string'
+  if (!base) return false
+  if (raw.kind === 'created') return typeof raw.text === 'string'
+  if (raw.kind === 'deleted') {
+    return (
+      typeof raw.text === 'string' &&
+      (raw.reason === 'task_removed' || raw.reason === 'project_removed')
+    )
+  }
+  if (raw.kind !== 'updated' || !Array.isArray(raw.changes)) return false
+  return raw.changes.every((change) => {
+    if (!isRecord(change)) return false
+    return (
+      (change.field === 'title' || change.field === 'text') &&
+      typeof change.before === 'string' &&
+      typeof change.after === 'string'
+    )
+  })
+}
+
+function isValidTaskEventLog(raw: unknown): boolean {
+  return Array.isArray(raw) && raw.every(isValidTaskEvent)
+}
+
 async function readLocalEnv(): Promise<Record<string, string>> {
   try {
     const raw = await fs.readFile(ENV_FILE, 'utf8')
@@ -48,7 +151,7 @@ async function summarizeWithAi(input: {
   if (!apiKey) {
     return {
       error:
-        'AI summarization failed. Check LLM_API_KEY / LLM_BASE_URL / LLM_MODEL (or OPENAI_* aliases) and server logs.',
+        'Weekly report generation requires LLM_API_KEY or OPENAI_API_KEY in the dev server environment. No report was generated.',
     }
   }
 
@@ -157,7 +260,7 @@ async function summarizeWithAi(input: {
   }
   return {
     error:
-      'AI summarization failed. Check LLM_API_KEY / LLM_BASE_URL / LLM_MODEL (or OPENAI_* aliases) and server logs.',
+      'AI weekly report generation failed. Check LLM_API_KEY / LLM_BASE_URL / LLM_MODEL (or OPENAI_* aliases) and server logs. No report was generated.',
   }
 }
 
@@ -215,7 +318,16 @@ function boardFileMiddleware() {
     if (req.method === 'PUT' && dataFile) {
       try {
         const raw = await readBody(req)
-        JSON.parse(raw)
+        const parsed = JSON.parse(raw) as unknown
+        const valid =
+          url === '/__board-api/state'
+            ? isValidWorkspaceState(parsed)
+            : isValidTaskEventLog(parsed)
+        if (!valid) {
+          res.statusCode = 400
+          res.end('Invalid board data')
+          return
+        }
         await fs.mkdir(path.dirname(dataFile), { recursive: true })
         await fs.writeFile(dataFile, raw, 'utf8')
         res.statusCode = 204

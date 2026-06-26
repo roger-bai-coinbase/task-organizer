@@ -1,4 +1,3 @@
-import type { CSSProperties } from 'react'
 import {
   useCallback,
   useEffect,
@@ -12,7 +11,6 @@ import './board.css'
 import { newId } from './ids'
 import {
   boardWithProjectHues,
-  hueFromId,
   miniPalette,
   pickDistinctHue,
   projectPalette,
@@ -47,6 +45,9 @@ import type {
 import { linkifyTaskBodyText } from './linkifyTaskBody'
 import { MiniNoteEditor } from './MiniNoteEditor'
 import { normalizeMiniBullets } from './miniNoteBulletKeys'
+import { BoardTabs } from './BoardTabs'
+import { DeleteUndoToast } from './DeleteUndoToast'
+import { useSyncedRef } from './useSyncedRef'
 import {
   buildWeeklyDiffText,
   collectTaskEvents,
@@ -615,8 +616,6 @@ export function BoardApp() {
   const taskNotesReadonlyRefs = useRef<
     Record<string, HTMLDivElement | null>
   >({})
-  const stateRef = useRef<BoardState | null>(null)
-  const workspaceRef = useRef<WorkspaceState | null>(null)
   const headerTapRef = useRef<{ id: string; t: number } | null>(null)
   const taskHeaderTapRef = useRef<{ key: string; t: number } | null>(null)
   const zSeq = useRef(0)
@@ -648,6 +647,8 @@ export function BoardApp() {
     if (!activeBoard) return null
     return { theme: activeBoard.theme, projects: activeBoard.projects }
   }, [activeBoard])
+  const workspaceRef = useSyncedRef(workspace)
+  const stateRef = useSyncedRef(state)
 
   /** Reflow readonly note sizing when text or wrap-affecting widths change (not every drag). */
   const miniNotesReadonlyLayoutKey = useMemo(() => {
@@ -845,7 +846,6 @@ export function BoardApp() {
   )
 
   useLayoutEffect(() => {
-    if (!state) return
     setBoard((prev) => {
       if (!prev) return prev
       let changed = false
@@ -874,7 +874,7 @@ export function BoardApp() {
           return { ...t, height: fitH, width }
         })
 
-        let newP = expandProjectToFitAllTasks({ ...p, tasks })
+        const newP = expandProjectToFitAllTasks({ ...p, tasks })
         const taskGeomsChanged = tasks.some((t, i) => {
           const u = p.tasks[i]
           return (
@@ -944,10 +944,6 @@ export function BoardApp() {
     }
     prevStateForEvents.current = flat
   }, [workspace])
-
-  useEffect(() => {
-    setTaskBodyFocusKey(null)
-  }, [workspace?.activeBoardId])
 
   useEffect(() => {
     if (saveEventsTimer.current) clearTimeout(saveEventsTimer.current)
@@ -1217,7 +1213,7 @@ export function BoardApp() {
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
     }
-  }, [drag, pendingProjectDrag, pendingTaskDrag, resize, bumpZ])
+  }, [drag, pendingProjectDrag, pendingTaskDrag, resize, bumpZ, setBoard, stateRef])
 
   useLayoutEffect(() => {
     if (!pendingBoardTabDrag && !boardTabReorder) return
@@ -1286,7 +1282,7 @@ export function BoardApp() {
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
     }
-  }, [pendingBoardTabDrag, boardTabReorder])
+  }, [pendingBoardTabDrag, boardTabReorder, workspaceRef])
 
   const setTheme = (theme: BoardTheme) => {
     setBoard((s) => (s ? { ...s, theme } : s))
@@ -1808,9 +1804,6 @@ export function BoardApp() {
   const zForTask = (projectId: string, taskId: string) =>
     20 + (zBoost.key === `t:${projectId}:${taskId}` ? zBoost.z : 0)
 
-  workspaceRef.current = workspace
-  stateRef.current = state
-
   if (!state || !workspace) {
     return (
       <div className="board-app board-app--loading" data-theme="blackboard">
@@ -1822,120 +1815,20 @@ export function BoardApp() {
   return (
     <div className="board-app" data-theme={state.theme}>
       <header className="board-toolbar">
-        <div
-          className={
-            boardTabReorder
-              ? 'board-toolbar-boards board-toolbar-boards--reordering'
-              : 'board-toolbar-boards'
-          }
-          role="tablist"
-          aria-label="Boards"
-        >
-          {workspace.boards.map((b, boardIndex) => (
-            <div
-              key={b.id}
-              ref={(el) => {
-                boardTabWrapRefs.current[b.id] = el
-              }}
-              className={[
-                'board-tab-wrap',
-                'board-tab-wrap--colored',
-                boardTabReorder?.boardId === b.id
-                  ? 'board-tab-wrap--dragging'
-                  : '',
-                boardTabReorder &&
-                boardTabReorder.hoverIndex === boardIndex &&
-                boardTabReorder.boardId !== b.id
-                  ? 'board-tab-wrap--drop-before'
-                  : '',
-                boardTabReorder &&
-                boardTabReorder.hoverIndex === workspace.boards.length &&
-                boardIndex === workspace.boards.length - 1
-                  ? 'board-tab-wrap--drop-after'
-                  : '',
-              ]
-                .filter(Boolean)
-                .join(' ')}
-              style={
-                { ['--board-tab-h']: String(hueFromId(b.id)) } as CSSProperties
-              }
-            >
-              {editingBoardTitleId === b.id ? (
-                <input
-                  ref={boardTabTitleInputRef}
-                  className="board-tab-input board-tab-input--colored"
-                  value={b.title}
-                  onChange={(e) => updateBoardTitle(b.id, e.target.value)}
-                  placeholder="Board title"
-                  aria-label="Board title"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onBlur={() => setEditingBoardTitleId(null)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      ;(e.target as HTMLInputElement).blur()
-                    }
-                    if (e.key === 'Escape') {
-                      e.preventDefault()
-                      setEditingBoardTitleId(null)
-                    }
-                  }}
-                />
-              ) : (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={b.id === workspace.activeBoardId}
-                  className={
-                    b.id === workspace.activeBoardId
-                      ? 'board-tab board-tab--colored board-tab--active'
-                      : 'board-tab board-tab--colored'
-                  }
-                  title="Drag to reorder · Double-click to rename"
-                  onPointerDown={(e) =>
-                    beginPendingBoardTabDrag(e, b.id, boardIndex)
-                  }
-                  onClick={() => {
-                    if (suppressBoardTabClickRef.current) {
-                      suppressBoardTabClickRef.current = false
-                      return
-                    }
-                    switchBoard(b.id)
-                  }}
-                  onDoubleClick={(e) => {
-                    e.preventDefault()
-                    setEditingBoardTitleId(b.id)
-                  }}
-                >
-                  {b.title.trim() || 'Untitled board'}
-                </button>
-              )}
-              {workspace.boards.length > 1 ? (
-                <button
-                  type="button"
-                  className="icon-btn board-tab-remove danger"
-                  title="Remove board"
-                  aria-label={`Remove board ${b.title.trim() || 'Untitled board'}`}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    removeBoard(b.id)
-                  }}
-                >
-                  ×
-                </button>
-              ) : null}
-            </div>
-          ))}
-          <button
-            type="button"
-            className="board-tab board-tab--add"
-            onClick={addBoard}
-            title="Add another board"
-          >
-            + Board
-          </button>
-        </div>
+        <BoardTabs
+          workspace={workspace}
+          editingBoardTitleId={editingBoardTitleId}
+          boardTabReorder={boardTabReorder}
+          boardTabTitleInputRef={boardTabTitleInputRef}
+          boardTabWrapRefs={boardTabWrapRefs}
+          suppressBoardTabClickRef={suppressBoardTabClickRef}
+          beginPendingBoardTabDrag={beginPendingBoardTabDrag}
+          updateBoardTitle={updateBoardTitle}
+          switchBoard={switchBoard}
+          setEditingBoardTitleId={setEditingBoardTitleId}
+          removeBoard={removeBoard}
+          addBoard={addBoard}
+        />
         <div className="segmented" role="group" aria-label="Surface style">
           <button
             type="button"
@@ -1972,35 +1865,14 @@ export function BoardApp() {
         </div>
       ) : null}
       {deleteUndo ? (
-        <div
-          className="delete-undo-toast"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          <span className="delete-undo-toast__msg">
-            {deleteUndoMessage(deleteUndo)}
-          </span>
-          <button
-            type="button"
-            className="btn btn-primary delete-undo-toast__undo"
-            title="When focus is not in a text field, ⌘Z or Ctrl+Z also undoes."
-            onClick={undoLastDelete}
-          >
-            Undo
-          </button>
-          <button
-            type="button"
-            className="icon-btn delete-undo-toast__dismiss"
-            aria-label="Dismiss"
-            onClick={() => {
-              clearDeleteUndoTimer()
-              setDeleteUndo(null)
-            }}
-          >
-            ×
-          </button>
-        </div>
+        <DeleteUndoToast
+          message={deleteUndoMessage(deleteUndo)}
+          onUndo={undoLastDelete}
+          onDismiss={() => {
+            clearDeleteUndoTimer()
+            setDeleteUndo(null)
+          }}
+        />
       ) : null}
       <div className="board-viewport">
         <div

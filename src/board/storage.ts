@@ -1,5 +1,12 @@
 import { newId } from './ids'
-import type { BoardEntry, BoardState, WorkspaceState } from './types'
+import type {
+  BoardEntry,
+  BoardState,
+  BoardTheme,
+  ProjectNote,
+  TaskNote,
+  WorkspaceState,
+} from './types'
 import { parseTaskEvents, type TaskChangeEvent } from './taskEvents'
 
 const WORKSPACE_LOCAL_KEY = 'productivity-workspace-v1'
@@ -10,12 +17,110 @@ const EVENTS_DISK_API = '/__board-api/task-events'
 const WEEKLY_REPORT_API = '/__board-api/weekly-report'
 const WEEKLY_REPORT_CLIENT_TIMEOUT_MS = 60_000
 
+function isRecord(raw: unknown): raw is Record<string, unknown> {
+  return !!raw && typeof raw === 'object' && !Array.isArray(raw)
+}
+
+function parseString(raw: unknown): string | null {
+  return typeof raw === 'string' ? raw : null
+}
+
+function parseFiniteNumber(raw: unknown): number | null {
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null
+}
+
+function parsePositiveNumber(raw: unknown): number | null {
+  const n = parseFiniteNumber(raw)
+  return n !== null && n > 0 ? n : null
+}
+
+function parseCreatedAt(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  return Number.isNaN(Date.parse(raw)) ? null : raw
+}
+
+function parseTheme(raw: unknown, fallback?: BoardTheme): BoardTheme | null {
+  if (raw === 'whiteboard' || raw === 'blackboard') return raw
+  return fallback ?? null
+}
+
+function parseTaskNote(raw: unknown): TaskNote | null {
+  if (!isRecord(raw)) return null
+  const id = parseString(raw.id)
+  const title = parseString(raw.title)
+  const text = parseString(raw.text)
+  const createdAt = parseCreatedAt(raw.createdAt)
+  const x = parseFiniteNumber(raw.x)
+  const y = parseFiniteNumber(raw.y)
+  const width = parsePositiveNumber(raw.width)
+  const height = parsePositiveNumber(raw.height)
+  if (
+    id === null ||
+    title === null ||
+    text === null ||
+    createdAt === null ||
+    x === null ||
+    y === null ||
+    width === null ||
+    height === null
+  ) {
+    return null
+  }
+  return { id, title, text, createdAt, x, y, width, height }
+}
+
+function parseProjectNote(raw: unknown): ProjectNote | null {
+  if (!isRecord(raw)) return null
+  const id = parseString(raw.id)
+  const title = parseString(raw.title)
+  const createdAt = parseCreatedAt(raw.createdAt)
+  const hue = parseFiniteNumber(raw.hue)
+  const x = parseFiniteNumber(raw.x)
+  const y = parseFiniteNumber(raw.y)
+  const width = parsePositiveNumber(raw.width)
+  const height = parsePositiveNumber(raw.height)
+  if (!Array.isArray(raw.tasks)) return null
+  const tasks = raw.tasks.map(parseTaskNote)
+  if (
+    id === null ||
+    title === null ||
+    createdAt === null ||
+    hue === null ||
+    x === null ||
+    y === null ||
+    width === null ||
+    height === null ||
+    tasks.some((task) => task === null)
+  ) {
+    return null
+  }
+  return {
+    id,
+    title,
+    createdAt,
+    hue,
+    x,
+    y,
+    width,
+    height,
+    tasks: tasks as TaskNote[],
+  }
+}
+
+function parseProjectList(raw: unknown): ProjectNote[] | null {
+  if (!Array.isArray(raw)) return null
+  const projects = raw.map(parseProjectNote)
+  return projects.some((project) => project === null)
+    ? null
+    : (projects as ProjectNote[])
+}
+
 export function parseBoardState(raw: unknown): BoardState | null {
-  if (!raw || typeof raw !== 'object') return null
-  const o = raw as Record<string, unknown>
-  if (!Array.isArray(o.projects)) return null
-  if (o.theme !== 'whiteboard' && o.theme !== 'blackboard') return null
-  return raw as BoardState
+  if (!isRecord(raw)) return null
+  const projects = parseProjectList(raw.projects)
+  const theme = parseTheme(raw.theme)
+  if (!projects || !theme) return null
+  return { theme, projects }
 }
 
 function legacyBoardToWorkspace(board: BoardState): WorkspaceState {
@@ -34,23 +139,24 @@ function legacyBoardToWorkspace(board: BoardState): WorkspaceState {
 }
 
 export function parseWorkspaceState(raw: unknown): WorkspaceState | null {
-  if (!raw || typeof raw !== 'object') return null
-  const o = raw as Record<string, unknown>
+  if (!isRecord(raw)) return null
+  const o = raw
   if (Array.isArray(o.boards) && typeof o.activeBoardId === 'string') {
     const boards: BoardEntry[] = []
     for (const item of o.boards) {
-      if (!item || typeof item !== 'object') continue
-      const b = item as Record<string, unknown>
+      if (!isRecord(item)) return null
+      const b = item
       if (typeof b.id !== 'string') continue
-      if (!Array.isArray(b.projects)) continue
-      const theme =
-        b.theme === 'whiteboard' || b.theme === 'blackboard' ? b.theme : 'blackboard'
+      const projects = parseProjectList(b.projects)
+      if (!projects) return null
+      const theme = parseTheme(b.theme, 'blackboard')
+      if (!theme) return null
       const title = typeof b.title === 'string' ? b.title : 'Board'
       boards.push({
         id: b.id,
         title,
         theme,
-        projects: b.projects as BoardEntry['projects'],
+        projects,
       })
     }
     if (boards.length === 0) return null

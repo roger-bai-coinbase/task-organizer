@@ -253,17 +253,72 @@ function summarizeNotesChanges(before: string, after: string): NotesSummary {
 
 export function parseTaskEvents(raw: unknown): TaskChangeEvent[] {
   if (!Array.isArray(raw)) return []
-  return raw.filter((x) => {
-    if (!x || typeof x !== 'object') return false
-    const o = x as Record<string, unknown>
-    if (typeof o.kind !== 'string') return false
-    if (typeof o.at !== 'string') return false
-    if (typeof o.projectId !== 'string') return false
-    if (typeof o.projectTitle !== 'string') return false
-    if (typeof o.taskId !== 'string') return false
-    if (typeof o.taskTitle !== 'string') return false
-    return o.kind === 'created' || o.kind === 'updated' || o.kind === 'deleted'
-  }) as TaskChangeEvent[]
+  const out: TaskChangeEvent[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue
+    const o = item as Record<string, unknown>
+    if (typeof o.at !== 'string' || Number.isNaN(Date.parse(o.at))) continue
+    if (typeof o.projectId !== 'string') continue
+    if (typeof o.projectTitle !== 'string') continue
+    if (typeof o.taskId !== 'string') continue
+    if (typeof o.taskTitle !== 'string') continue
+
+    if (o.kind === 'created') {
+      if (typeof o.text !== 'string') continue
+      out.push({
+        kind: 'created',
+        at: o.at,
+        projectId: o.projectId,
+        projectTitle: o.projectTitle,
+        taskId: o.taskId,
+        taskTitle: o.taskTitle,
+        text: o.text,
+      })
+      continue
+    }
+
+    if (o.kind === 'updated') {
+      if (!Array.isArray(o.changes)) continue
+      const changes: TaskFieldDelta[] = []
+      for (const change of o.changes) {
+        if (!change || typeof change !== 'object' || Array.isArray(change)) {
+          continue
+        }
+        const c = change as Record<string, unknown>
+        if (c.field !== 'title' && c.field !== 'text') continue
+        if (typeof c.before !== 'string' || typeof c.after !== 'string') {
+          continue
+        }
+        changes.push({ field: c.field, before: c.before, after: c.after })
+      }
+      out.push({
+        kind: 'updated',
+        at: o.at,
+        projectId: o.projectId,
+        projectTitle: o.projectTitle,
+        taskId: o.taskId,
+        taskTitle: o.taskTitle,
+        changes,
+      })
+      continue
+    }
+
+    if (o.kind === 'deleted') {
+      if (typeof o.text !== 'string') continue
+      if (o.reason !== 'task_removed' && o.reason !== 'project_removed') continue
+      out.push({
+        kind: 'deleted',
+        at: o.at,
+        projectId: o.projectId,
+        projectTitle: o.projectTitle,
+        taskId: o.taskId,
+        taskTitle: o.taskTitle,
+        text: o.text,
+        reason: o.reason,
+      })
+    }
+  }
+  return out
 }
 
 function collectLinksFromTaskEvents(
